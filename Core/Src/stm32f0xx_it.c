@@ -183,7 +183,7 @@ void USART1_IRQHandler(void) {
 	if (LL_USART_IsEnabledIT_IDLE(USART1)
 			&& LL_USART_IsActiveFlag_IDLE(USART1)) {
 		LL_USART_ClearFlag_IDLE(USART1);
-		uart_rx_check();
+		UART_RxCheck();
 	}
 	/* USER CODE END USART1_IRQn 0 */
 	HAL_UART_IRQHandler(&huart1);

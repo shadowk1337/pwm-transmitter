@@ -36,10 +36,17 @@
 
 #define NEXT_LINE "\r\n"
 
-#define ACK 	0x00000004U
-#define SYN 	0x00000026U
+#define ACK     0x00000004U
+#define SYN     0x00000026U
 
-#define FALSE	0x00000000U
+/** @defgroup boolean operators
+ * @{
+ */
+#define TRUE    0x00000001U
+#define FALSE   0x00000000U
+/*
+ * }
+ */
 
 /* USER CODE END PD */
 
@@ -74,10 +81,17 @@ static void MX_USART1_UART_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
+//
+//uint8_t* RING_Begin(RingBuffer*);
+//uint8_t* RING_End(RingBuffer*);
+//uint8_t* RING_Start(RingBuffer*);
+//size_t RING_BufferSize(RingBuffer*);
+void UART_RxCheck(void);
+void UART_ProcessData(const void*, size_t);
+void UART_SendString(const char*);
 
-void uart_rx_check(void);
-void uart_process_data(const void*, size_t);
-void uart_send_string(const char*);
+void PWM_ProcessString(const char*);
+void PWM_ProcessChar(char);
 
 /* USER CODE END PFP */
 
@@ -89,7 +103,7 @@ int __io_putchar(int ch) {
 	return 0;
 }
 
-/** @defgroup reading console through DMA
+/** @defgroup ring buffer implementation
  * @{
  */
 /**
@@ -102,26 +116,40 @@ typedef struct {
 
 RingBuffer ring_buf = { .pos = 0 };
 
-uint8_t* get_ring_begin(RingBuffer *instance) {
+uint8_t _RING_CheckInstance(RingBuffer *instance) {
 	if (IS_NULL(instance->buff) || !ARRAY_LEN(instance->buff)) {
+		return FALSE;
+	}
+	return TRUE;
+}
+
+uint8_t* RING_Begin(RingBuffer *instance) {
+	if (!_RING_CheckInstance(instance)) {
 		return NULL;
 	}
 	return &instance->buff[0];
 }
 
-uint8_t* get_ring_end(RingBuffer *instance) {
-	if (IS_NULL(instance->buff) || !ARRAY_LEN(instance->buff)) {
+uint8_t* RING_End(RingBuffer *instance) {
+	if (!_RING_CheckInstance(instance)) {
 		return NULL;
 	}
 	size_t len = ARRAY_LEN(instance->buff);
 	return &instance->buff[len - 1];
 }
 
-uint8_t* get_ring_start(RingBuffer *instance) {
-	if (IS_NULL(instance->buff) || !ARRAY_LEN(instance->buff)) {
+uint8_t* RING_Start(RingBuffer *instance) {
+	if (!_RING_CheckInstance(instance)) {
 		return NULL;
 	}
 	return &instance->buff[instance->pos];
+}
+
+size_t RING_BufferSize(RingBuffer *instance) {
+	if (!_RING_CheckInstance(instance)) {
+		return 0;
+	}
+	return ARRAY_LEN(instance->buff);
 }
 
 /**
@@ -131,73 +159,58 @@ uint8_t* get_ring_start(RingBuffer *instance) {
 /** @defgroup reading console through DMA
  * @{
  */
-void uart_rx_check(void) {
+void UART_RxCheck(void) {
 	size_t pos = ARRAY_LEN(ring_buf.buff)
 			- LL_DMA_GetDataLength(DMA1, LL_DMA_CHANNEL_3);
 	if (pos == ring_buf.pos) {
 		return;
 	}
 	if (pos > ring_buf.pos) {
-		uart_process_data(get_ring_start(&ring_buf), pos - ring_buf.pos);
+		UART_ProcessData(RING_Start(&ring_buf), pos - ring_buf.pos);
 	} else {
-		uart_process_data(get_ring_start(&ring_buf),
-		ARRAY_LEN(ring_buf.buff) - ring_buf.pos);
+		UART_ProcessData(RING_Start(&ring_buf),
+				RING_BufferSize(&ring_buf) - ring_buf.pos);
 		if (pos > 0) {
-			uart_process_data(&ring_buf.buff[0], pos);
+			UART_ProcessData(RING_Begin(&ring_buf), pos);
 		}
 	}
 	ring_buf.pos = pos;
 }
 
-void uart_process_data(const void *data, size_t len) {
-	const uint8_t *d = data;
-	while (len > 0) {
-		LL_USART_TransmitData8(USART1, *d);
-		while (!LL_USART_IsActiveFlag_TXE(USART1)) {
-		}
-		len--, d++;
-	}
-	HAL_UART_Transmit(&huart1, NEXT_LINE, 2, -1);
-
+void UART_ProcessData(const void *data, size_t len) {
+	PWM_ProcessString((const char*) data);
 	while (!LL_USART_IsActiveFlag_TC(USART1)) {
 	}
 }
 
-void uart_send_string(const char *str) {
-	uart_process_data(str, strlen(str));
+void UART_SendString(const char *str) {
+	UART_ProcessData(str, strlen(str));
 }
 
 /**
  * @}
  */
 
-//uint8_t rx_buf[32];
-//uint8_t main_buf[64];
-//
-//uint16_t old_pos = 0, new_pos = 0;
-//void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size) {
-//	if (huart->Instance == USART1) {
-//		old_pos = new_pos;
-//
-//		if (old_pos + Size > ARRAY_LEN(main_buf)) {
-//			uint16_t data_to_copy = ARRAY_LEN(main_buf) - old_pos;
-//			memcpy((uint8_t*) main_buf + old_pos, rx_buf, data_to_copy);
-//
-//			old_pos = 0;
-//			memcpy((uint8_t*) main_buf, (uint8_t*) rx_buf + data_to_copy,
-//					(Size - data_to_copy));
-//			new_pos = (Size - data_to_copy);
-//		} else {
-//			memcpy((uint8_t*) main_buf + old_pos, rx_buf, Size);
-//			new_pos = Size + old_pos;
-//		}
-//		uart_process_data(main_buf, strlen(main_buf));
-//
-//		HAL_UARTEx_ReceiveToIdle_DMA(&huart1, (uint8_t*) rx_buf,
-//				ARRAY_LEN(rx_buf));
-//		__HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
-//	}
-//}
+/** @defgroup PWM string and char processing
+ * @{
+ */
+void PWM_ProcessString(const char *str) {
+	const char *s = str;
+	size_t len = strlen(str);
+	while (len > 0) {
+		PWM_ProcessChar(*s);
+		len--, s++;
+	}
+	HAL_UART_Transmit(&huart1, NEXT_LINE, 2, -1);
+}
+
+void PWM_ProcessChar(char ch) {
+	LL_USART_TransmitData8(USART1, ch);
+}
+/**
+ * @}
+ */
+
 uint32_t get_rising_edge(TIM_HandleTypeDef *htim, uint32_t Channel) {
 	if (htim != &htim3) {
 		return 0;
@@ -242,14 +255,14 @@ void parse_message(const char *msg) {
 //	if (LL_DMA_IsEnabledIT_HT(DMA1, LL_DMA_CHANNEL_3)
 //			&& LL_DMA_IsActiveFlag_HT5(DMA1)) {
 //		LL_DMA_ClearFlag_HT5(DMA1); /* Clear half-transfer complete flag */
-//		uart_rx_check(); /* Check for data to process */
+//		UART_RxCheck(); /* Check for data to process */
 //	}
 //
 //	/* Check transfer-complete interrupt */
 //	if (LL_DMA_IsEnabledIT_TC(DMA1, LL_DMA_CHANNEL_3)
 //			&& LL_DMA_IsActiveFlag_TC5(DMA1)) {
 //		LL_DMA_ClearFlag_TC5(DMA1); /* Clear transfer complete flag */
-//		uart_rx_check(); /* Check for data to process */
+//		UART_RxCheck(); /* Check for data to process */
 //	}
 //
 //	/* Implement other events when needed */
@@ -289,13 +302,13 @@ void parse_message(const char *msg) {
 
 void HAL_UART_RxHalfCpltCallback(UART_HandleTypeDef *huart) {
 // передана половина данных
-//	uart_rx_check();
+//	UART_RxCheck();
 }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 // завершена передача всех данных
 //	HAL_UART_Receive_DMA(&huart1, buff, 8);
-//	uart_rx_check();
+//	UART_RxCheck();
 }
 
 //void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
