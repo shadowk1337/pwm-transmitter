@@ -57,6 +57,7 @@
 /* External variables --------------------------------------------------------*/
 extern TIM_HandleTypeDef htim2;
 extern TIM_HandleTypeDef htim3;
+extern TIM_HandleTypeDef htim16;
 extern DMA_HandleTypeDef hdma_usart1_rx;
 extern UART_HandleTypeDef huart1;
 /* USER CODE BEGIN EV */
@@ -137,16 +138,16 @@ void SysTick_Handler(void) {
 /******************************************************************************/
 
 /**
- * @brief This function handles DMA1 channel 2 and 3 interrupts.
+ * @brief This function handles DMA1 channel 4 and 5 interrupts.
  */
-void DMA1_Channel2_3_IRQHandler(void) {
-	/* USER CODE BEGIN DMA1_Channel2_3_IRQn 0 */
+void DMA1_Channel4_5_IRQHandler(void) {
+	/* USER CODE BEGIN DMA1_Channel4_5_IRQn 0 */
 
-	/* USER CODE END DMA1_Channel2_3_IRQn 0 */
+	/* USER CODE END DMA1_Channel4_5_IRQn 0 */
 	HAL_DMA_IRQHandler(&hdma_usart1_rx);
-	/* USER CODE BEGIN DMA1_Channel2_3_IRQn 1 */
+	/* USER CODE BEGIN DMA1_Channel4_5_IRQn 1 */
 
-	/* USER CODE END DMA1_Channel2_3_IRQn 1 */
+	/* USER CODE END DMA1_Channel4_5_IRQn 1 */
 }
 
 /**
@@ -176,15 +177,33 @@ void TIM3_IRQHandler(void) {
 }
 
 /**
+ * @brief This function handles TIM16 global interrupt.
+ */
+void TIM16_IRQHandler(void) {
+	/* USER CODE BEGIN TIM16_IRQn 0 */
+//	PWM_SendHello();
+	/* USER CODE END TIM16_IRQn 0 */
+	HAL_TIM_IRQHandler(&htim16);
+	/* USER CODE BEGIN TIM16_IRQn 1 */
+
+	/* USER CODE END TIM16_IRQn 1 */
+}
+
+/**
  * @brief This function handles USART1 global interrupt / USART1 wake-up interrupt through EXTI line 25.
  */
 void USART1_IRQHandler(void) {
 	/* USER CODE BEGIN USART1_IRQn 0 */
-	if (LL_USART_IsEnabledIT_IDLE(USART1)
-			&& LL_USART_IsActiveFlag_IDLE(USART1)) {
-		LL_USART_ClearFlag_IDLE(USART1);
-		UART_RxCheck();
-	}
+//	if (LL_USART_IsEnabledIT_IDLE(USART1)
+//			&& LL_USART_IsActiveFlag_IDLE(USART1)) {
+//
+//		__HAL_UART_CLEAR_IDLEFLAG(&huart1);
+//		__HAL_UART_DISABLE_IT(&huart1, UART_IT_IDLE);
+//		HAL_UART_AbortReceive(&huart1);
+//		HAL_UARTEx_EnableStopMode(&huart1);
+//		UART_RxCheck();
+//		__HAL_UART_ENABLE_IT(&huart1, UART_IT_IDLE);
+//	}
 	/* USER CODE END USART1_IRQn 0 */
 	HAL_UART_IRQHandler(&huart1);
 	/* USER CODE BEGIN USART1_IRQn 1 */

@@ -22,12 +22,15 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
-#include <string.h>
-
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+
+typedef struct {
+	uint8_t buff[512];
+	size_t pos;
+} RingBuffer;
 
 /* USER CODE END PTD */
 
@@ -36,8 +39,19 @@
 
 #define NEXT_LINE "\r\n"
 
-#define ACK     0x00000004U
-#define SYN     0x00000026U
+#define ACK     0x6U
+#define NAK     0x25U
+#define SYN     0x26U
+
+/** @defgroup PWM duty cycle modes in percent
+ * @{
+ */
+#define PWM_LOW_PERCENT 25
+#define PWM_HIGH_PERCENT 75
+#define PWM_IDLE_PERCENT 101
+/*
+ * }
+ */
 
 /** @defgroup boolean operators
  * @{
@@ -53,23 +67,22 @@
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
 
-#define ARRAY_LEN(x) 			(sizeof(x) / sizeof((x)[0]))
-#define IS_NULL(x) 				((x) == NULL)
-
-#define READ_BIT(REG, BIT)    	((REG) & (BIT))
+#define ARRAY_LEN(x) 						(sizeof(x) / sizeof((x)[0]))
+#define IS_NULL(x)							((x) == NULL)
+#define GET_PERCENT_VALUE(value, percent) 	((value) * ((percent) / 100.0))
+#define READ_BIT(REG, BIT)					((REG) & (BIT))
 
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
+TIM_HandleTypeDef htim16;
 
 UART_HandleTypeDef huart1;
 DMA_HandleTypeDef hdma_usart1_rx;
 
 /* USER CODE BEGIN PV */
-
-int pulse = 0, dir = 100;
 
 /* USER CODE END PV */
 
@@ -80,18 +93,13 @@ static void MX_DMA_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
+static void MX_TIM16_Init(void);
 /* USER CODE BEGIN PFP */
-//
-//uint8_t* RING_Begin(RingBuffer*);
-//uint8_t* RING_End(RingBuffer*);
-//uint8_t* RING_Start(RingBuffer*);
-//size_t RING_BufferSize(RingBuffer*);
-void UART_RxCheck(void);
-void UART_ProcessData(const void*, size_t);
-void UART_SendString(const char*);
 
-void PWM_ProcessString(const char*);
-void PWM_ProcessChar(char);
+void PWM_DecodeChar(char, uint8_t*);
+void PWM_SendDecodedChar(char);
+void PWM_ProcessString(const char*, size_t);
+void PWM_SetIdle(void);
 
 /* USER CODE END PFP */
 
@@ -103,16 +111,69 @@ int __io_putchar(int ch) {
 	return 0;
 }
 
+volatile uint16_t PWM_data_sent_flag = 0;
+
+void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim) {
+	if (htim->Instance == TIM2) {
+		HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_2);
+		PWM_data_sent_flag = 1;
+		char cha = PWM_data_sent_flag == 1 ? '1' : '0';
+		HAL_UART_Transmit(&huart1, &cha, 1, -1);
+//
+	}
+
+//	if (HAL_TIM_PWM_Stop_IT(&htim2, TIM_CHANNEL_2) != HAL_OK) {
+//		Error_Handler();
+//	}
+//	HAL_TIM_PWM_Stop_IT(&htim2, TIM_CHANNEL_2);
+//	*data = 1;
+//	LL_USART_TransmitData8(USART1, 's');
+//	if (htim->Instance == TIM2) {
+//		if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2) {
+//
+//		}
+//	}
+}
+
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size) {
+	if (huart == &huart1) {
+		__HAL_UART_DISABLE_IT(&huart1, UART_IT_IDLE);
+		UART_RxCheck();
+	}
+}
+
+void HAL_UART_IDLE_Callback(UART_HandleTypeDef *huart) {
+	if (huart == &huart1) {
+		char ch = 's';
+		HAL_UART_Transmit(huart, &ch, 1, -1);
+		__HAL_UART_DISABLE_IT(&huart1, UART_IT_IDLE);
+		UART_RxCheck();
+	}
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+}
+
+//void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+//	if (htim->Instance == TIM2) {
+////		HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_2);
+//		char cha = PWM_data_sent_flag == 1 ? '1' : '0';
+//		HAL_UART_Transmit(&huart1, &cha, 1, -1);
+//		PWM_data_sent_flag = 1;
+//	}
+//}
+
+//void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
+//	if (htim->Instance == TIM3) {
+//		int falling_edge = HAL_TIM_ReadCapturedValue(&htim3, TIM_CHANNEL_1);
+//		int rising_edge = HAL_TIM_ReadCapturedValue(&htim3, TIM_CHANNEL_2);
+//		printf("r %d f %d\r\n", rising_edge, falling_edge);
+//	}
+//}
+
 /** @defgroup ring buffer implementation
  * @{
  */
-/**
- * @brief ring buffer structure definition with default value
- */
-typedef struct {
-	uint8_t buff[1024];
-	size_t pos;
-} RingBuffer;
 
 RingBuffer ring_buf = { .pos = 0 };
 
@@ -159,9 +220,22 @@ size_t RING_BufferSize(RingBuffer *instance) {
 /** @defgroup reading console through DMA
  * @{
  */
+void UART_Stop() {
+	HAL_UART_AbortReceive(&huart1);
+}
+
+void UART_Start() {
+	HAL_UART_AbortReceive(&huart1);
+	memset(ring_buf.buff, 0, ARRAY_LEN(ring_buf.buff));
+	while (HAL_UARTEx_ReceiveToIdle_DMA(&huart1, ring_buf.buff,
+			ARRAY_LEN(ring_buf.buff)) != HAL_OK)
+		;
+}
+
 void UART_RxCheck(void) {
-	size_t pos = ARRAY_LEN(ring_buf.buff)
-			- LL_DMA_GetDataLength(DMA1, LL_DMA_CHANNEL_3);
+	size_t pos = RING_BufferSize(&ring_buf)
+			- LL_DMA_GetDataLength(DMA1, LL_DMA_CHANNEL_5);
+
 	if (pos == ring_buf.pos) {
 		return;
 	}
@@ -178,9 +252,20 @@ void UART_RxCheck(void) {
 }
 
 void UART_ProcessData(const void *data, size_t len) {
-	PWM_ProcessString((const char*) data);
+//	HAL_UART_DMAPause(&huart1);
+//	HAL_UART_DeInit(&huart1);
+//	HAL_UARTEx_EnableStopMode(&huart1);
+//	HAL_UART_AbortReceive(&huart1);
+
+//	HAL_UART_DMAStop(&huart1);
+//	UART_Stop();
+
+	UART_Stop();
+	PWM_ProcessString((const char*) data, len);
 	while (!LL_USART_IsActiveFlag_TC(USART1)) {
 	}
+//	PWM_SetIDLE();
+//	HAL_UART_DMAResume(&huart1);
 }
 
 void UART_SendString(const char *str) {
@@ -194,128 +279,125 @@ void UART_SendString(const char *str) {
 /** @defgroup PWM string and char processing
  * @{
  */
-void PWM_ProcessString(const char *str) {
-	const char *s = str;
-	size_t len = strlen(str);
-	while (len > 0) {
-		PWM_ProcessChar(*s);
-		len--, s++;
+void PWM_DecodeChar(char ch, uint8_t *decoded_char) {
+	if (IS_NULL(decoded_char)) {
+		return;
 	}
-	HAL_UART_Transmit(&huart1, NEXT_LINE, 2, -1);
+	for (int i = 0, mv = 7; i <= 7; ++i, --mv) {
+		decoded_char[i] = (ch & (1 << mv)) ? 1 : 0;
+	}
 }
 
-void PWM_ProcessChar(char ch) {
-	LL_USART_TransmitData8(USART1, ch);
+void PWM_SendHello(void) {
+//	uint8_t decoded_ACK[8];
+//	PWM_DecodeChar(ACK, decoded_ACK);
+	PWM_SendDecodedChar(ACK);
 }
+
+void PWM_SendDecodedChar(char ch) {
+	for (int i = 0, mv = 7; i <= 7; ++i, --mv) {
+		uint8_t bit = (ch & (1 << mv)) ? 1 : 0;
+
+		uint16_t duty_cycle = bit == 0 ? PWM_LOW_PERCENT : PWM_HIGH_PERCENT;
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2,
+				GET_PERCENT_VALUE(TIM2->ARR, duty_cycle));
+
+		HAL_TIM_PWM_Start_IT(&htim2, TIM_CHANNEL_2);
+
+//		__HAL_TIM_DISABLE_IT(&htim2, TIM_IT_CC2);
+//		__HAL_TIM_DISABLE_IT(&htim2, TIM_IT_COM);
+//		__HAL_TIM_DISABLE_IT(&htim2, TIM_IT_TRIGGER);
+//		__HAL_TIM_DISABLE_IT(&htim2, TIM_IT_BREAK);
+
+		while (!PWM_data_sent_flag)
+			;
+		PWM_data_sent_flag = 0;
+	}
+
+// !
+
+//	if (HAL_TIM_PWM_Start_IT(&htim2, TIM_CHANNEL_2) != HAL_OK) {
+//		Error_Handler();
+//	}
+//	HAL_TIM_PWM_Start_IT(&htim2, TIM_CHANNEL_2);
+//	while (!*data) {
+//	}
+//	*data = 0;
+
+//	uint32_t tr_ar[8];
+//	for (int i = 0, mv = 7; i <= 7; ++i, --mv) {
+//		uint8_t bit = (ch & (1 << mv)) ? 1 : 0;
+//		if (bit == 0) {
+//			tr_ar[i] = 0;
+//		} else if (bit == 1) {
+//			tr_ar[i] = 100;
+//		}
+//	}
+//
+//	__HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
+//	HAL_TIM_PWM_Start_DMA(&htim2, TIM_CHANNEL_2, tr_ar, 8);
+//
+//	while (HAL_TIM_GetChannelState(&htim2, TIM_CHANNEL_2)
+//			!= HAL_TIM_CHANNEL_STATE_READY) {
+//		char c;
+//		int status = HAL_TIM_GetChannelState(&htim2, TIM_CHANNEL_2);
+//		if (status == HAL_TIM_CHANNEL_STATE_RESET) {
+//			c = '0';
+//		} else if (status == HAL_TIM_CHANNEL_STATE_READY) {
+//			c = '1';
+//		} else if (status == HAL_TIM_CHANNEL_STATE_BUSY) {
+//			c = '2';
+//		}
+//		HAL_UART_Transmit(&huart1, &c, 1, -1);
+//	}
+//	PWM_data_sent_flag = 0;
+
+//	while (HAL_DMA_GetState(&hdma_tim2_ch2) != HAL_DMA_STATE_READY) {
+//		char ch;
+//		int status = HAL_DMA_GetState(&hdma_tim2_ch2);
+//		if (status == HAL_DMA_STATE_RESET) {
+//			ch = '0';
+//		} else if (status == HAL_DMA_STATE_READY) {
+//			ch = '1';
+//		} else if (status == HAL_DMA_STATE_BUSY) {
+//			ch = '2';
+//		} else if (status == HAL_DMA_STATE_TIMEOUT) {
+//			ch = '3';
+//		}
+//		HAL_UART_Transmit(&huart1, &ch, 1, -1);
+//	}
+
+//	while (!DMA_GetFlagStatus(DMA2_FLAG_TC3))
+//		;
+//	DMA_ClearFlag(DMA2_FLAG_TC3);
+
+//	while (!PWM_data_sent_flag) {
+//	}
+//	PWM_data_sent_flag = 0;
+}
+
+void PWM_SetIDLE(void) {
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2,
+			GET_PERCENT_VALUE(TIM2->ARR, PWM_IDLE_PERCENT));
+//	HAL_TIM_PWM_Start_IT(&htim2, TIM_CHANNEL_2);
+}
+
+void PWM_ProcessString(const char *str, size_t len) {
+	volatile const char *s = str;
+	HAL_UART_Transmit(&huart1, str, strlen(str), -1);
+	while (len > 0) {
+//		uint8_t bin[8];
+//		PWM_DecodeChar(*s, bin);
+		PWM_SendDecodedChar(*s);
+//		PWM_SetIDLE();
+		len--, s++;
+	}
+}
+
 /**
  * @}
  */
 
-uint32_t get_rising_edge(TIM_HandleTypeDef *htim, uint32_t Channel) {
-	if (htim != &htim3) {
-		return 0;
-	}
-	if (htim->State != (HAL_TIM_StateTypeDef) HAL_TIM_CHANNEL_STATE_READY) {
-		return 0;
-	}
-	if ((htim->Instance->CCER >> (Channel + 1)) & 1U) {
-		return 0;
-	}
-//	uint32_t polarity = LL_TIM_IC_GetPolarity(TIMx, Channel)
-	return HAL_TIM_ReadCapturedValue(htim, Channel);
-}
-
-uint32_t get_falling_edge(TIM_HandleTypeDef *htim, uint32_t Channel) {
-	if (htim != &htim3) {
-		return 0;
-	}
-	if (htim->State != (HAL_TIM_StateTypeDef) HAL_TIM_CHANNEL_STATE_READY) {
-		return 0;
-	}
-	if (READ_BIT(htim->Instance->CCER >> (Channel + 1), 1) != 1) {
-		return 0;
-	}
-	return HAL_TIM_ReadCapturedValue(htim, Channel);
-}
-
-void toggle_bits(uint32_t ascii_char) {
-}
-
-/**
- * @brief Function for converting message from dec to bin
- * @arg msg - message given by user from host
- */
-void parse_message(const char *msg) {
-
-}
-
-//void DMA1_Channel3_IRQHandler(void) {
-//	printf("DMA sent IRQ\r\n");
-//	/* Check half-transfer complete interrupt */
-//	if (LL_DMA_IsEnabledIT_HT(DMA1, LL_DMA_CHANNEL_3)
-//			&& LL_DMA_IsActiveFlag_HT5(DMA1)) {
-//		LL_DMA_ClearFlag_HT5(DMA1); /* Clear half-transfer complete flag */
-//		UART_RxCheck(); /* Check for data to process */
-//	}
-//
-//	/* Check transfer-complete interrupt */
-//	if (LL_DMA_IsEnabledIT_TC(DMA1, LL_DMA_CHANNEL_3)
-//			&& LL_DMA_IsActiveFlag_TC5(DMA1)) {
-//		LL_DMA_ClearFlag_TC5(DMA1); /* Clear transfer complete flag */
-//		UART_RxCheck(); /* Check for data to process */
-//	}
-//
-//	/* Implement other events when needed */
-//}
-
-//void HAL_USART_IRQHandler(void) {
-//	printf("Hello");
-//}
-
-//void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
-//	printf("%d\r\n", __HAL_TIM_GET_COUNTER(htim));
-//}
-
-//void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim) {
-//	printf("%d\r\n", __HAL_TIM_GET_COUNTER(htim));
-//	if (htim == &htim2) {
-//		pulse += dir;
-//		if (pulse == 1000) {
-//			dir = -100;
-//		} else if (pulse == 0) {
-//			dir = 100;
-//		}
-//		TIM2->CCR2 = pulse;
-//	}
-//}
-
-/*
- void process_buff_half(uint8_t *buff, size_t begin_idx) {
- if (begin_idx < 0 || begin_idx >= 8) {
- return;
- }
- uint8_t transmitted_buff[4];
- memcpy(transmitted_buff, &buff[begin_idx], 4 * sizeof(uint8_t));
- HAL_UART_Transmit(&huart1, transmitted_buff, 4, -1);
- }
- */
-
-void HAL_UART_RxHalfCpltCallback(UART_HandleTypeDef *huart) {
-// передана половина данных
-//	UART_RxCheck();
-}
-
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
-// завершена передача всех данных
-//	HAL_UART_Receive_DMA(&huart1, buff, 8);
-//	UART_RxCheck();
-}
-
-//void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
-//	if (htim == &htim16) {
-//		printf("from IT\r\n");
-//	}
-//}
 /* USER CODE END 0 */
 
 /**
@@ -349,26 +431,47 @@ int main(void) {
 	MX_USART1_UART_Init();
 	MX_TIM2_Init();
 	MX_TIM3_Init();
+	MX_TIM16_Init();
 	/* USER CODE BEGIN 2 */
-	TIM2->CCR2 = 200;
-	TIM2->ARR = 1000;
-//	HAL_TIM_PWM_Start_IT(&htim2, TIM_CHANNEL_2);
-//	HAL_TIM_IC_Start_IT(&htim3, TIM_CHANNEL_2);
-//	HAL_TIM_IC_Start_IT(&htim3, TIM_CHANNEL_3);
-//	HAL_TIM_Base_Start_IT(&htim16);
-//	HAL_UART_Receive_DMA(&huart1, uart_rx_dma_buffer,
-//			ARRAY_LEN(uart_rx_dma_buffer));
 
-	HAL_UARTEx_ReceiveToIdle_DMA(&huart1, (uint8_t*) ring_buf.buff,
-			ARRAY_LEN(ring_buf.buff));
+	HAL_TIM_IC_Start_IT(&htim3, TIM_CHANNEL_1);
+	HAL_TIM_IC_Start_IT(&htim3, TIM_CHANNEL_2);
 
+//	HAL_TIM_Base_Start_IT(&htim2);
+
+//	HAL_TIM_IC_Start_IT(&htim1, TIM_CHANNEL_1);
+//	HAL_TIM_IC_Start_IT(&htim3, TIM_CHANNEL_1);
+//	HAL_TIM_Base_Start_IT(&htim2);
+//	HAL_TIM_Base_Start_IT(&htim3);
+	if (HAL_TIM_Base_Start_IT(&htim16) != HAL_OK) {
+		Error_Handler();
+	}
+
+//	if (HAL_UARTEx_ReceiveToIdle_IT(&huart1, (uint8_t*) ring_buf.buff,
+//			ARRAY_LEN(ring_buf.buff)) != HAL_OK) {
+//		Error_Handler();
+//	}
+
+//	if (HAL_UARTEx_ReceiveToIdle_DMA(&huart1, (uint8_t*) ring_buf.buff,
+//			ARRAY_LEN(ring_buf.buff)) != HAL_OK) {
+//		Error_Handler();
+//	}
 //	__HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
+
+	HAL_UART_Receive_DMA(&huart1, (uint8_t*) ring_buf.buff,
+			ARRAY_LEN(ring_buf.buff));
+	__HAL_UART_ENABLE_IT(&huart1, UART_IT_IDLE);
+	__HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
 
 	/* USER CODE END 2 */
 
 	/* Infinite loop */
 	/* USER CODE BEGIN WHILE */
 	while (1) {
+//		char ch;
+//		HAL_UART_Receive(&huart1, (uint8_t*) &ch, 1, -1);
+//		PWM_SendDecodedChar(ch);
+//
 //		HAL_UART_Transmit(&huart1, buff, 8, -1);
 //		uint32_t rising_edge = get_rising_edge(&htim3, TIM_CHANNEL_2);
 //		uint32_t falling_edge = get_falling_edge(&htim3, TIM_CHANNEL_3);
@@ -443,6 +546,7 @@ static void MX_TIM2_Init(void) {
 
 	/* USER CODE END TIM2_Init 0 */
 
+	TIM_ClockConfigTypeDef sClockSourceConfig = { 0 };
 	TIM_MasterConfigTypeDef sMasterConfig = { 0 };
 	TIM_OC_InitTypeDef sConfigOC = { 0 };
 
@@ -452,9 +556,16 @@ static void MX_TIM2_Init(void) {
 	htim2.Instance = TIM2;
 	htim2.Init.Prescaler = 48000 - 1;
 	htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-	htim2.Init.Period = 0;
+	htim2.Init.Period = 100 - 1;
 	htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
 	htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+	if (HAL_TIM_Base_Init(&htim2) != HAL_OK) {
+		Error_Handler();
+	}
+	sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+	if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK) {
+		Error_Handler();
+	}
 	if (HAL_TIM_PWM_Init(&htim2) != HAL_OK) {
 		Error_Handler();
 	}
@@ -490,6 +601,7 @@ static void MX_TIM3_Init(void) {
 
 	/* USER CODE END TIM3_Init 0 */
 
+	TIM_ClockConfigTypeDef sClockSourceConfig = { 0 };
 	TIM_SlaveConfigTypeDef sSlaveConfig = { 0 };
 	TIM_MasterConfigTypeDef sMasterConfig = { 0 };
 	TIM_IC_InitTypeDef sConfigIC = { 0 };
@@ -500,10 +612,14 @@ static void MX_TIM3_Init(void) {
 	htim3.Instance = TIM3;
 	htim3.Init.Prescaler = 48000 - 1;
 	htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-	htim3.Init.Period = 65535;
+	htim3.Init.Period = 100 - 1;
 	htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
 	htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
 	if (HAL_TIM_Base_Init(&htim3) != HAL_OK) {
+		Error_Handler();
+	}
+	sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+	if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK) {
 		Error_Handler();
 	}
 	if (HAL_TIM_IC_Init(&htim3) != HAL_OK) {
@@ -522,13 +638,14 @@ static void MX_TIM3_Init(void) {
 			!= HAL_OK) {
 		Error_Handler();
 	}
-	sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
+	sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_FALLING;
 	sConfigIC.ICSelection = TIM_ICSELECTION_INDIRECTTI;
 	sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
 	sConfigIC.ICFilter = 0;
 	if (HAL_TIM_IC_ConfigChannel(&htim3, &sConfigIC, TIM_CHANNEL_1) != HAL_OK) {
 		Error_Handler();
 	}
+	sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
 	sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
 	if (HAL_TIM_IC_ConfigChannel(&htim3, &sConfigIC, TIM_CHANNEL_2) != HAL_OK) {
 		Error_Handler();
@@ -536,6 +653,36 @@ static void MX_TIM3_Init(void) {
 	/* USER CODE BEGIN TIM3_Init 2 */
 
 	/* USER CODE END TIM3_Init 2 */
+
+}
+
+/**
+ * @brief TIM16 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_TIM16_Init(void) {
+
+	/* USER CODE BEGIN TIM16_Init 0 */
+
+	/* USER CODE END TIM16_Init 0 */
+
+	/* USER CODE BEGIN TIM16_Init 1 */
+
+	/* USER CODE END TIM16_Init 1 */
+	htim16.Instance = TIM16;
+	htim16.Init.Prescaler = 48000 - 1;
+	htim16.Init.CounterMode = TIM_COUNTERMODE_UP;
+	htim16.Init.Period = 1000;
+	htim16.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+	htim16.Init.RepetitionCounter = 0;
+	htim16.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+	if (HAL_TIM_Base_Init(&htim16) != HAL_OK) {
+		Error_Handler();
+	}
+	/* USER CODE BEGIN TIM16_Init 2 */
+
+	/* USER CODE END TIM16_Init 2 */
 
 }
 
@@ -581,9 +728,9 @@ static void MX_DMA_Init(void) {
 	__HAL_RCC_DMA1_CLK_ENABLE();
 
 	/* DMA interrupt init */
-	/* DMA1_Channel2_3_IRQn interrupt configuration */
-	HAL_NVIC_SetPriority(DMA1_Channel2_3_IRQn, 0, 0);
-	HAL_NVIC_EnableIRQ(DMA1_Channel2_3_IRQn);
+	/* DMA1_Channel4_5_IRQn interrupt configuration */
+	HAL_NVIC_SetPriority(DMA1_Channel4_5_IRQn, 0, 0);
+	HAL_NVIC_EnableIRQ(DMA1_Channel4_5_IRQn);
 
 }
 
@@ -611,6 +758,7 @@ static void MX_GPIO_Init(void) {
 void Error_Handler(void) {
 	/* USER CODE BEGIN Error_Handler_Debug */
 	/* User can add his own implementation to report the HAL error return state */
+	printf("Error\r\n");
 	__disable_irq();
 	while (1) {
 	}

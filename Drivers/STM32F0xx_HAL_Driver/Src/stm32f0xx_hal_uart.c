@@ -2581,6 +2581,11 @@ void HAL_UART_IRQHandler(UART_HandleTypeDef *huart)
     return;
   }
 
+  if(((isrflags & USART_ISR_IDLE) != 0U) && ((cr1its & USART_CR1_IDLEIE) != 0U))
+    {
+        HAL_UART_IDLE_Callback(huart);
+        return;
+    }
 }
 
 /**
@@ -2719,6 +2724,10 @@ __weak void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
   /* NOTE : This function should not be modified, when the callback is needed,
             the HAL_UARTEx_RxEventCallback can be implemented in the user file.
    */
+}
+
+__weak void HAL_UART_IDLE_Callback(UART_HandleTypeDef *huart) {
+	UNUSED(huart);
 }
 
 /**

@@ -58,13 +58,13 @@ void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
 
+void UART_RxCheck(void);
+void UART_ProcessData(const void*, size_t);
+void UART_SendString(const char*);
+
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define TIM_RX_Pin GPIO_PIN_7
-#define TIM_RX_GPIO_Port GPIOA
-#define TIM_TX_Pin GPIO_PIN_3
-#define TIM_TX_GPIO_Port GPIOB
 /* USER CODE BEGIN Private defines */
 
 /* USER CODE END Private defines */
