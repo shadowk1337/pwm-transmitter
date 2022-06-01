@@ -58,7 +58,7 @@ void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
 
-void UART_RxCheck(void);
+void UART_RxCheck();
 void UART_ProcessData(const void*, size_t);
 void UART_SendString(const char*);
 
