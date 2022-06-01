@@ -58,9 +58,9 @@ void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
 
-void UART_RxCheck();
-void UART_ProcessData(const void*, size_t);
-void UART_SendString(const char*);
+void TIM2_CH2_StartPWM_IT(void);
+void TIM2_CH2_StopPWM_IT(void);
+void TIM2_CH2_SetCompare(uint32_t);
 
 /* USER CODE END EFP */
 
