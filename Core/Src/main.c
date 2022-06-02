@@ -22,14 +22,26 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
-#include "macro.h"
-#include "ringbuf.h"
 #include "transmitter.h"
+#include "ringbuf.h"
+
+#include <stddef.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <math.h>
 
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+
+typedef struct {
+	uint8_t Rx;
+	uint8_t hello;
+	uint8_t bit;
+	uint8_t IC;
+	uint8_t is_reliable;
+} Flags_TypeDef;
 
 /* USER CODE END PTD */
 
@@ -53,7 +65,11 @@ DMA_HandleTypeDef hdma_usart1_rx;
 
 /* USER CODE BEGIN PV */
 
-volatile uint8_t rx = 0;
+Flags_TypeDef f = { .Rx = 0, .hello = 0, .bit = 0, .IC = 0, .is_reliable = 0 };
+
+uint32_t IC_callback_cnt = 0;
+uint8_t bit_cnt = 0;
+uint8_t bits[8];
 
 /* USER CODE END PV */
 
@@ -67,29 +83,26 @@ static void MX_USART1_UART_Init(void);
 static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
 
-void PWM_SendDecodedChar(char);
-void PWM_ProcessString(const char*, size_t);
-
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
-int __io_putchar(int ch) {
-	HAL_UART_Transmit(&huart1, (uint8_t*) &ch, 1, 0xFFFF);
-	return 0;
-}
 
 inline void TIM2_CH2_StartPWM_IT(void) {
 	HAL_TIM_PWM_Start_IT(&htim2, TIM_CHANNEL_2);
 }
 
 inline void TIM2_CH2_StopPWM_IT(void) {
-	HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_2);
+	HAL_TIM_PWM_Stop_IT(&htim2, TIM_CHANNEL_2);
 }
 
 inline void TIM2_CH2_SetCompare(uint32_t CCR) {
 	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, CCR);
+}
+
+int __io_putchar(int ch) {
+	HAL_UART_Transmit(&huart1, (uint8_t*) &ch, 1, 0xFFFF);
+	return 0;
 }
 
 void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim) {
@@ -100,8 +113,27 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim) {
 }
 
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size) {
+	UNUSED(Size);
+
 	if (huart == &huart1) {
-		rx = 1;
+		f.Rx = 1;
+	}
+}
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+	if (htim->Instance == TIM3) {
+		f.bit = 1;
+	} else if (htim->Instance == TIM16) {
+		if (f.is_reliable) {
+			return;
+		}
+		f.hello = 1;
+	}
+}
+
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
+	if (htim == &htim3) {
+		f.IC = 1;
 	}
 }
 
@@ -120,6 +152,52 @@ static void RxCheck(void) {
 		}
 	}
 	rb->pos = pos;
+}
+
+static uint8_t rises_to_char(uint8_t *bit) {
+	uint8_t c = 0;
+	for (int i = 0, rank = 128; i < 8 && rank > 0; i++, rank /= 2) {
+		if (bit[i] > TIM2->ARR * 0.5) {
+			c += rank;
+		}
+	}
+	return c;
+}
+
+static void lastBitCheck(void) {
+	if (bit_cnt == 7 && IC_callback_cnt > 1) {
+		bits[bit_cnt] = HAL_TIM_ReadCapturedValue(&htim3,
+		TIM_CHANNEL_2);
+
+		uint8_t ch = rises_to_char(bits);
+		HAL_UART_Transmit(&huart1, &ch, 1, -1);
+
+		bit_cnt = 0;
+		IC_callback_cnt = 0;
+
+		printf("\r\n\r\n");
+	}
+}
+
+static void ICCheck(void) {
+	IC_callback_cnt++;
+//	TIM3->CNT = 0;
+//	TIM16->CNT = 0;
+
+	uint32_t falling = HAL_TIM_ReadCapturedValue(&htim3,
+	TIM_CHANNEL_2);
+	uint32_t rising = HAL_TIM_ReadCapturedValue(&htim3, TIM_CHANNEL_1);
+
+	printf("f = %d; r = %d\r\n", falling, rising);
+
+	if (IC_callback_cnt % 2 || IC_callback_cnt == 1) {
+		return;
+	}
+
+	if (abs((rising + falling) - TIM2->ARR) <= TIM2->ARR * 0.1) {
+		bits[bit_cnt] = rising;
+	}
+	bit_cnt++;
 }
 
 /* USER CODE END 0 */
@@ -160,14 +238,24 @@ int main(void) {
 	MX_TIM2_Init();
 	/* USER CODE BEGIN 2 */
 
-//	HAL_TIM_IC_Start_IT(&htim3, TIM_CHANNEL_1);
-//	HAL_TIM_IC_Start_IT(&htim3, TIM_CHANNEL_2);
+	if (HAL_TIM_Base_Start_IT(&htim3) != HAL_OK) {
+		Error_Handler();
+	}
+
+	if (HAL_TIM_IC_Start_IT(&htim3, TIM_CHANNEL_1) != HAL_OK) {
+		Error_Handler();
+	}
+
+	if (HAL_TIM_IC_Start_IT(&htim3, TIM_CHANNEL_2) != HAL_OK) {
+		Error_Handler();
+	}
+
 	if (HAL_TIM_Base_Start_IT(&htim16) != HAL_OK) {
 		Error_Handler();
 	}
 
-	if (HAL_UARTEx_ReceiveToIdle_DMA(&huart1, (uint8_t*) rb->buff,
-			ringBuf_Size()) != HAL_OK) {
+	if (HAL_UARTEx_ReceiveToIdle_DMA(&huart1, rb->buff, ringBuf_Size())
+			!= HAL_OK) {
 		Error_Handler();
 	}
 	__HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
@@ -177,9 +265,20 @@ int main(void) {
 	/* Infinite loop */
 	/* USER CODE BEGIN WHILE */
 	while (1) {
-		if (rx) {
+
+		if (f.hello) {
+//			sendHelloMsg();
+			sendChar('a');
+			f.hello = 0;
+		} else if (f.Rx) {
 			RxCheck();
-			rx = 0;
+			f.Rx = 0;
+		} else if (f.bit) {
+			lastBitCheck();
+			f.bit = 0;
+		} else if (f.IC) {
+			ICCheck();
+			f.IC = 0;
 		}
 		/* USER CODE END WHILE */
 
@@ -264,7 +363,7 @@ static void MX_TIM2_Init(void) {
 			!= HAL_OK) {
 		Error_Handler();
 	}
-	sConfigOC.OCMode = TIM_OCMODE_PWM1;
+	sConfigOC.OCMode = TIM_OCMODE_PWM2;
 	sConfigOC.Pulse = 0;
 	sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
 	sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
@@ -291,7 +390,6 @@ static void MX_TIM3_Init(void) {
 	/* USER CODE END TIM3_Init 0 */
 
 	TIM_ClockConfigTypeDef sClockSourceConfig = { 0 };
-	TIM_SlaveConfigTypeDef sSlaveConfig = { 0 };
 	TIM_MasterConfigTypeDef sMasterConfig = { 0 };
 	TIM_IC_InitTypeDef sConfigIC = { 0 };
 
@@ -314,28 +412,21 @@ static void MX_TIM3_Init(void) {
 	if (HAL_TIM_IC_Init(&htim3) != HAL_OK) {
 		Error_Handler();
 	}
-	sSlaveConfig.SlaveMode = TIM_SLAVEMODE_RESET;
-	sSlaveConfig.InputTrigger = TIM_TS_TI2FP2;
-	sSlaveConfig.TriggerPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
-	sSlaveConfig.TriggerFilter = 0;
-	if (HAL_TIM_SlaveConfigSynchro(&htim3, &sSlaveConfig) != HAL_OK) {
-		Error_Handler();
-	}
 	sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
 	sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
 	if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig)
 			!= HAL_OK) {
 		Error_Handler();
 	}
-	sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_FALLING;
-	sConfigIC.ICSelection = TIM_ICSELECTION_INDIRECTTI;
+	sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
+	sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
 	sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
 	sConfigIC.ICFilter = 0;
 	if (HAL_TIM_IC_ConfigChannel(&htim3, &sConfigIC, TIM_CHANNEL_1) != HAL_OK) {
 		Error_Handler();
 	}
-	sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
-	sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
+	sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_FALLING;
+	sConfigIC.ICSelection = TIM_ICSELECTION_INDIRECTTI;
 	if (HAL_TIM_IC_ConfigChannel(&htim3, &sConfigIC, TIM_CHANNEL_2) != HAL_OK) {
 		Error_Handler();
 	}
@@ -362,7 +453,7 @@ static void MX_TIM16_Init(void) {
 	htim16.Instance = TIM16;
 	htim16.Init.Prescaler = 48000 - 1;
 	htim16.Init.CounterMode = TIM_COUNTERMODE_UP;
-	htim16.Init.Period = 1000;
+	htim16.Init.Period = 10000 - 1;
 	htim16.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
 	htim16.Init.RepetitionCounter = 0;
 	htim16.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;

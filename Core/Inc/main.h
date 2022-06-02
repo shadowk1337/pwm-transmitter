@@ -31,9 +31,9 @@ extern "C" {
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+
 #include "stm32f0xx_ll_dma.h"
-#include "stm32f0xx_ll_usart.h"
-#include "stm32f0xx_ll_tim.h"
+
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
