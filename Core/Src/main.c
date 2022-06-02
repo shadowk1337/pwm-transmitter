@@ -29,6 +29,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <string.h>
 #include <math.h>
 
 /* USER CODE END Includes */
@@ -39,7 +40,7 @@
 typedef struct {
 	uint8_t Rx;
 	uint8_t hello;
-	uint8_t bit;
+	uint8_t char_received;
 	uint8_t IC;
 	uint8_t is_reliable;
 } Flags_TypeDef;
@@ -66,8 +67,8 @@ DMA_HandleTypeDef hdma_usart1_rx;
 
 /* USER CODE BEGIN PV */
 
-Flags_TypeDef flag =
-		{ .Rx = 0, .hello = 0, .bit = 0, .IC = 0, .is_reliable = 0 };
+Flags_TypeDef flag = { .Rx = 0, .hello = 0, .char_received = 0, .IC = 0,
+		.is_reliable = 0 };
 
 /* USER CODE END PV */
 
@@ -98,17 +99,24 @@ inline void TIM2_CH2_SetCompare(uint32_t CCR) {
 	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, CCR);
 }
 
+void TIM3_Start_IT(void) {
+	HAL_TIM_Base_Start_IT(&htim3);
+	HAL_TIM_IC_Start_IT(&htim3, TIM_CHANNEL_1);
+	HAL_TIM_IC_Start_IT(&htim3, TIM_CHANNEL_2);
+}
+
+void TIM3_Stop_IT(void) {
+	HAL_TIM_Base_Stop_IT(&htim3);
+	HAL_TIM_IC_Stop_IT(&htim3, TIM_CHANNEL_1);
+	HAL_TIM_IC_Stop_IT(&htim3, TIM_CHANNEL_2);
+}
+
 inline uint32_t TIM3_CH1_ReadCapValue(void) {
 	return HAL_TIM_ReadCapturedValue(&htim3, TIM_CHANNEL_1);
 }
 
 inline uint32_t TIM3_CH2_ReadCapValue(void) {
 	return HAL_TIM_ReadCapturedValue(&htim3, TIM_CHANNEL_2);
-}
-
-int __io_putchar(int ch) {
-	HAL_UART_Transmit(&huart1, (uint8_t*) &ch, 1, 0xFFFF);
-	return 0;
 }
 
 void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim) {
@@ -121,6 +129,10 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim) {
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size) {
 	UNUSED(Size);
 
+	if (!flag.is_reliable) {
+		return;
+	}
+
 	if (huart == &huart1) {
 		flag.Rx = 1;
 	}
@@ -128,7 +140,7 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size) {
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 	if (htim->Instance == TIM3) {
-		flag.bit = 1;
+		flag.char_received = 1;
 	} else if (htim->Instance == TIM16) {
 		if (flag.is_reliable) {
 			return;
@@ -141,6 +153,21 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 	if (htim == &htim3) {
 		flag.IC = 1;
 	}
+}
+
+void preparedForReceive(void) {
+	sendACK();
+
+	flag.is_reliable = 1;
+
+	const uint8_t msg[] =
+			"======================================================================\r\n"
+					"Congratulations! You've successfully connected to the receiver device!\r\n"
+					"Usage: just type any symbol or copypaste text in the console menu\r\n"
+					"======================================================================\r\n\n";
+	HAL_UART_Transmit(&huart1, msg, (uint16_t) strlen(msg), -1);
+
+	TIM3_Stop_IT();
 }
 
 static void RxCheck(void) {
@@ -225,21 +252,20 @@ int main(void) {
 	/* Infinite loop */
 	/* USER CODE BEGIN WHILE */
 	while (1) {
-
 		if (flag.hello) {
-//			sendHelloMsg();
-			sendChar('a');
+			sendSYN();
 			flag.hello = 0;
 		} else if (flag.Rx) {
 			RxCheck();
 			flag.Rx = 0;
-		} else if (flag.bit) {
+		} else if (flag.char_received) {
 			lastBitCheck();
-			flag.bit = 0;
+			flag.char_received = 0;
 		} else if (flag.IC) {
 			ICCheck();
 			flag.IC = 0;
 		}
+
 		/* USER CODE END WHILE */
 
 		/* USER CODE BEGIN 3 */
@@ -502,7 +528,6 @@ static void MX_GPIO_Init(void) {
 void Error_Handler(void) {
 	/* USER CODE BEGIN Error_Handler_Debug */
 	/* User can add his own implementation to report the HAL error return state */
-	printf("Error\r\n");
 	__disable_irq();
 	while (1) {
 	}

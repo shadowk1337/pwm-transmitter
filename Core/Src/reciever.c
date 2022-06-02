@@ -4,15 +4,28 @@
 #include "main.h"
 
 Receive_TypeDef r = { .IC_callback_cnt = 0, .bit_cnt = 0 };
+Reliable_TypeDef rel = { .msg_pos = 0 };
 
 static uint8_t binToChar(uint32_t *bits) {
 	uint8_t ch = 0;
-	for (int i = 0, rank = 128; i < 8 && rank > 0; i++, rank /= 2) {
-		if (bits[i] > TIM3->ARR * 0.5) {
-			ch += rank;
-		}
+	for (int32_t i = 0, mv = 7; i < 8; i++, mv--) {
+		uint32_t bit = (bits[i] > TIM3->ARR / 2u) ? 1 : 0;
+		ch |= bit << mv;
 	}
 	return ch;
+}
+
+static void checkReceivedCharSYNACK(uint8_t ch) {
+	if (rel.msg_pos == 0) {
+		if (ch == SYN) {
+			rel.msg_pos = 1;
+		}
+	} else {
+		if (ch == ACK) {
+			preparedForReceive();
+		}
+		rel.msg_pos = 0;
+	}
 }
 
 void lastBitCheck(void) {
@@ -20,7 +33,7 @@ void lastBitCheck(void) {
 		r.bits[r.bit_cnt] = TIM3_CH1_ReadCapValue();
 
 		uint8_t ch = binToChar(r.bits);
-		HAL_UART_Transmit(&huart1, &ch, 1, -1);
+		checkReceivedCharSYNACK(ch);
 
 		r.bit_cnt = r.IC_callback_cnt = 0;
 	}

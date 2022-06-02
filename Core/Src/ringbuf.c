@@ -13,28 +13,28 @@ void ringBuf_Init(void) {
 	rb->pos = 0;
 }
 
-uint8_t* ringBuf_Begin() {
+uint8_t* ringBuf_Begin(void) {
 	if (!checkInstance(rb)) {
 		return NULL;
 	}
 	return &rb->buff[0];
 }
 
-uint8_t* ringBuf_End() {
+uint8_t* ringBuf_End(void) {
 	if (!checkInstance(rb)) {
 		return NULL;
 	}
 	return &rb->buff[ringBuf_Size() - 1];
 }
 
-uint8_t* ringBuf_Pos() {
+uint8_t* ringBuf_Pos(void) {
 	if (!checkInstance(rb)) {
 		return NULL;
 	}
 	return &rb->buff[rb->pos];
 }
 
-size_t ringBuf_Size() {
+size_t ringBuf_Size(void) {
 	if (!checkInstance(rb)) {
 		return 0;
 	}

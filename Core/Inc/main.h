@@ -62,6 +62,8 @@ void TIM2_CH2_StartPWM_IT(void);
 void TIM2_CH2_StopPWM_IT(void);
 void TIM2_CH2_SetCompare(uint32_t);
 
+void TIM3_Start_IT(void);
+void TIM3_Stop_IT(void);
 uint32_t TIM3_CH1_ReadCapValue(void);
 uint32_t TIM3_CH2_ReadCapValue(void);
 

@@ -10,7 +10,9 @@ typedef struct {
 	uint32_t bits[8];
 } Receive_TypeDef;
 
-extern Receive_TypeDef r;
+typedef struct {
+	uint16_t msg_pos;
+} Reliable_TypeDef;
 
 void lastBitCheck(void);
 void ICCheck(void);
