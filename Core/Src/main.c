@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 
 #include "transmitter.h"
+#include "reciever.h"
 #include "ringbuf.h"
 
 #include <stddef.h>
@@ -65,11 +66,8 @@ DMA_HandleTypeDef hdma_usart1_rx;
 
 /* USER CODE BEGIN PV */
 
-Flags_TypeDef f = { .Rx = 0, .hello = 0, .bit = 0, .IC = 0, .is_reliable = 0 };
-
-uint32_t IC_callback_cnt = 0;
-uint8_t bit_cnt = 0;
-uint8_t bits[8];
+Flags_TypeDef flag =
+		{ .Rx = 0, .hello = 0, .bit = 0, .IC = 0, .is_reliable = 0 };
 
 /* USER CODE END PV */
 
@@ -100,6 +98,14 @@ inline void TIM2_CH2_SetCompare(uint32_t CCR) {
 	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, CCR);
 }
 
+inline uint32_t TIM3_CH1_ReadCapValue(void) {
+	return HAL_TIM_ReadCapturedValue(&htim3, TIM_CHANNEL_1);
+}
+
+inline uint32_t TIM3_CH2_ReadCapValue(void) {
+	return HAL_TIM_ReadCapturedValue(&htim3, TIM_CHANNEL_2);
+}
+
 int __io_putchar(int ch) {
 	HAL_UART_Transmit(&huart1, (uint8_t*) &ch, 1, 0xFFFF);
 	return 0;
@@ -116,24 +122,24 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size) {
 	UNUSED(Size);
 
 	if (huart == &huart1) {
-		f.Rx = 1;
+		flag.Rx = 1;
 	}
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 	if (htim->Instance == TIM3) {
-		f.bit = 1;
+		flag.bit = 1;
 	} else if (htim->Instance == TIM16) {
-		if (f.is_reliable) {
+		if (flag.is_reliable) {
 			return;
 		}
-		f.hello = 1;
+		flag.hello = 1;
 	}
 }
 
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 	if (htim == &htim3) {
-		f.IC = 1;
+		flag.IC = 1;
 	}
 }
 
@@ -152,52 +158,6 @@ static void RxCheck(void) {
 		}
 	}
 	rb->pos = pos;
-}
-
-static uint8_t rises_to_char(uint8_t *bit) {
-	uint8_t c = 0;
-	for (int i = 0, rank = 128; i < 8 && rank > 0; i++, rank /= 2) {
-		if (bit[i] > TIM2->ARR * 0.5) {
-			c += rank;
-		}
-	}
-	return c;
-}
-
-static void lastBitCheck(void) {
-	if (bit_cnt == 7 && IC_callback_cnt > 1) {
-		bits[bit_cnt] = HAL_TIM_ReadCapturedValue(&htim3,
-		TIM_CHANNEL_2);
-
-		uint8_t ch = rises_to_char(bits);
-		HAL_UART_Transmit(&huart1, &ch, 1, -1);
-
-		bit_cnt = 0;
-		IC_callback_cnt = 0;
-
-		printf("\r\n\r\n");
-	}
-}
-
-static void ICCheck(void) {
-	IC_callback_cnt++;
-//	TIM3->CNT = 0;
-//	TIM16->CNT = 0;
-
-	uint32_t falling = HAL_TIM_ReadCapturedValue(&htim3,
-	TIM_CHANNEL_2);
-	uint32_t rising = HAL_TIM_ReadCapturedValue(&htim3, TIM_CHANNEL_1);
-
-	printf("f = %d; r = %d\r\n", falling, rising);
-
-	if (IC_callback_cnt % 2 || IC_callback_cnt == 1) {
-		return;
-	}
-
-	if (abs((rising + falling) - TIM2->ARR) <= TIM2->ARR * 0.1) {
-		bits[bit_cnt] = rising;
-	}
-	bit_cnt++;
 }
 
 /* USER CODE END 0 */
@@ -266,19 +226,19 @@ int main(void) {
 	/* USER CODE BEGIN WHILE */
 	while (1) {
 
-		if (f.hello) {
+		if (flag.hello) {
 //			sendHelloMsg();
 			sendChar('a');
-			f.hello = 0;
-		} else if (f.Rx) {
+			flag.hello = 0;
+		} else if (flag.Rx) {
 			RxCheck();
-			f.Rx = 0;
-		} else if (f.bit) {
+			flag.Rx = 0;
+		} else if (flag.bit) {
 			lastBitCheck();
-			f.bit = 0;
-		} else if (f.IC) {
+			flag.bit = 0;
+		} else if (flag.IC) {
 			ICCheck();
-			f.IC = 0;
+			flag.IC = 0;
 		}
 		/* USER CODE END WHILE */
 
@@ -342,9 +302,9 @@ static void MX_TIM2_Init(void) {
 
 	/* USER CODE END TIM2_Init 1 */
 	htim2.Instance = TIM2;
-	htim2.Init.Prescaler = 48000 - 1;
+	htim2.Init.Prescaler = 480 - 1;
 	htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-	htim2.Init.Period = 100 - 1;
+	htim2.Init.Period = 10000 - 1;
 	htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
 	htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
 	if (HAL_TIM_Base_Init(&htim2) != HAL_OK) {
@@ -397,9 +357,9 @@ static void MX_TIM3_Init(void) {
 
 	/* USER CODE END TIM3_Init 1 */
 	htim3.Instance = TIM3;
-	htim3.Init.Prescaler = 48000 - 1;
+	htim3.Init.Prescaler = 480 - 1;
 	htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-	htim3.Init.Period = 100 - 1;
+	htim3.Init.Period = 10000 - 1;
 	htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
 	htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
 	if (HAL_TIM_Base_Init(&htim3) != HAL_OK) {

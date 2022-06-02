@@ -43,7 +43,7 @@ extern "C" {
 
 /* Exported constants --------------------------------------------------------*/
 /* USER CODE BEGIN EC */
-
+extern UART_HandleTypeDef huart1;
 /* USER CODE END EC */
 
 /* Exported macro ------------------------------------------------------------*/
@@ -61,6 +61,9 @@ void Error_Handler(void);
 void TIM2_CH2_StartPWM_IT(void);
 void TIM2_CH2_StopPWM_IT(void);
 void TIM2_CH2_SetCompare(uint32_t);
+
+uint32_t TIM3_CH1_ReadCapValue(void);
+uint32_t TIM3_CH2_ReadCapValue(void);
 
 /* USER CODE END EFP */
 
