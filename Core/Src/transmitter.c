@@ -4,7 +4,7 @@
 #include "main.h"
 
 static void processString(const uint8_t *str, size_t len) {
-	TIM3_Stop_IT();
+//	TIM3_Stop_IT();
 
 	const uint8_t *s = str;
 	while (len > 0) {
@@ -13,7 +13,7 @@ static void processString(const uint8_t *str, size_t len) {
 		len--, s++;
 	}
 
-	TIM3_Start_IT();
+//	TIM3_Start_IT();
 }
 
 void sendACK(void) {
@@ -32,7 +32,7 @@ void sendString(const uint8_t *str, size_t len) {
 
 void sendChar(uint8_t ch) {
 	sending_flag = 1;
-	for (int32_t i = 0, mv = 7; i <= 8; ++i, --mv) {
+	for (int32_t i = 0, mv = 7; i <= 7; ++i, --mv) {
 		uint16_t duty_cycle;
 
 		if (i == 8) {

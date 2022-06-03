@@ -67,6 +67,8 @@ void TIM3_Stop_IT(void);
 uint32_t TIM3_CH1_ReadCapValue(void);
 uint32_t TIM3_CH2_ReadCapValue(void);
 
+void preparedForReceive(void);
+
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
